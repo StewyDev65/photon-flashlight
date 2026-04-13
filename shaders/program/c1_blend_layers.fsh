@@ -155,6 +155,10 @@ uniform mat4 shadowModelViewInverse;
 #include "/include/misc/distant_water.glsl"
 #endif
 
+#ifdef FLASHLIGHT_VOLUMETRIC
+#include "/include/lighting/flashlight_volumetrics.glsl"
+#endif
+
 vec3 blend_layers_with_fog(
     vec3 background_color,
     vec4 translucent_color,
@@ -431,6 +435,11 @@ void main() {
         fragment_color,
         border_fog(front_position_scene, direction_world)
     );
+#endif
+
+    // Flashlight volumetric beam + dust particles
+#ifdef FLASHLIGHT_VOLUMETRIC
+    fragment_color += get_flashlight_volumetrics(direction_world, view_distance, eye_skylight);
 #endif
 
     // Blend clouds in front of translucents

@@ -16,7 +16,7 @@
 #include "/include/lighting/lpv/blocklight.glsl"
 #endif
 
-#ifdef HANDHELD_LIGHTING
+#if defined HANDHELD_LIGHTING || defined FLASHLIGHT
 #include "/include/lighting/handheld_lighting.glsl"
 #endif
 
@@ -272,6 +272,10 @@ vec3 get_diffuse_lighting(
 
 #ifdef HANDHELD_LIGHTING
     lighting += get_handheld_lighting(scene_pos, ao);
+#endif
+
+#ifdef FLASHLIGHT
+    lighting += get_flashlight_lighting(scene_pos, normal, ao) * flashlight_active;
 #endif
 
     lighting += material.emission * emission_scale;
