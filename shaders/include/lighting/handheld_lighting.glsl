@@ -189,6 +189,7 @@ float get_flashlight_shadow(vec3 scene_pos) {
 
         // Skip sky/void pixels
         if (scene_depth >= 1.0 - 1e-5 || scene_depth == 0.0) continue;
+        if (scene_depth < hand_depth) continue; // skip hand geometry
 
         // Convert screen-space Z values to view-space distances (positive, away
         // from camera) — same convention as ssrt.glsl
@@ -245,6 +246,10 @@ vec3 get_flashlight_lighting(vec3 scene_pos, vec3 normal, float ao) {
 
     float cone = smoothstep(outer_cutoff, inner_cutoff, cos_theta);
     if (cone < 1e-4) return vec3(0.0);
+
+    // Don't apply flashlight to the hand model itself
+    float self_depth = texelFetch(depthtex1, ivec2(gl_FragCoord.xy), 0).x;
+    if (self_depth < hand_depth) return vec3(0.0);
 
     // ─── Flashlight shadow ────────────────────────────────────────────────
 #if defined FLASHLIGHT_SHADOWS && defined IS_IRIS

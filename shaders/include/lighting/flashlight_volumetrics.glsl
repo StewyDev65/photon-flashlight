@@ -39,12 +39,31 @@ vec3 get_flashlight_volumetrics(vec3 frag_dir, float max_dist, float sky_exposur
     float outer = clamp(1.0 - (1.0 - 0.866) * FLASHLIGHT_RADIUS, 0.0, 0.999);
     float inner = clamp(1.0 - (1.0 - 0.978) * FLASHLIGHT_RADIUS, outer + 0.001, 1.0);
 
-    // The ray direction is constant along a parallel ray, so cone is computed once
-    float cos_ray = dot(look, frag_dir);
+    // Flashlight world-space origin at player hand
+    vec3 fl_right_w = normalize(cross(look, vec3(0.0, 1.0, 0.0)));
+    vec3 fl_up_w    = normalize(cross(fl_right_w, look));
+    vec3 hand_offset_world = fl_right_w *  FL_HAND_OFFSET.x
+    + fl_up_w    *  FL_HAND_OFFSET.y
+    + look       * -FL_HAND_OFFSET.z;
+    vec3 fl_origin = (cameraPosition - relativeEyePosition) + hand_offset_world;
+
+    // March from fl_origin toward the fragment — cone is then constant for all
+    // samples (parallel beam), eliminating the ghost beam artifact
+    vec3 frag_world  = cameraPosition + frag_dir * min(max_dist, 12.0 * FLASHLIGHT_DISTANCE);
+    vec3 fl_to_frag  = frag_world - fl_origin;
+    float fl_march_dist = length(fl_to_frag);
+    vec3 fl_dir      = fl_to_frag / max(fl_march_dist, 1e-5);
+
+    // Cone computed once — constant since we march in a fixed direction from fl_origin
+    float cos_ray = dot(look, fl_dir);
     float cone    = smoothstep(outer, inner, cos_ray);
     if (cone < 0.001) return vec3(0.0);
 
-    float march_dist = min(max_dist, 12.0 * FLASHLIGHT_DISTANCE);
+    // Don't render volumetrics on the hand model itself
+    float self_depth = texelFetch(depthtex1, ivec2(gl_FragCoord.xy), 0).x;
+    if (self_depth < hand_depth) return vec3(0.0);
+
+    float march_dist = min(fl_march_dist, 12.0 * FLASHLIGHT_DISTANCE);
     float step_size  = march_dist / float(FLASHLIGHT_VOL_STEPS);
 
     vec3 result = vec3(0.0);
@@ -52,9 +71,9 @@ vec3 get_flashlight_volumetrics(vec3 frag_dir, float max_dist, float sky_exposur
     for (int i = 0; i < FLASHLIGHT_VOL_STEPS; i++) {
         float t = (float(i) + 0.5) * step_size;
 
-        // Distance falloff per step
+        // t IS the axial distance since we march from fl_origin
         float scaled_t = t / FLASHLIGHT_DISTANCE;
-        float falloff   = 1.0 / (scaled_t * scaled_t * 0.5 + 1.0);
+        float falloff  = 1.0 / (scaled_t * scaled_t * 0.5 + 1.0);
 
         // ─── Per-step shadow: single depth test projected from flashlight source ──
         float vol_shadow = 1.0;
@@ -70,10 +89,7 @@ vec3 get_flashlight_volumetrics(vec3 frag_dir, float max_dist, float sky_exposur
 
             vec3 fl_source_view = scene_to_view_space(-relativeEyePosition + hand_offset);
 
-            // View-space position of this volumetric sample
-            // frag_dir is world-space, scene_to_view_space needs scene-space:
-            // scene = frag_dir * t (cameraPosition cancels since it's relative)
-            vec3 step_view = scene_to_view_space(frag_dir * t);
+            vec3 step_view = scene_to_view_space((fl_origin - cameraPosition) + fl_dir * t);
 
             // Sample the midpoint between source and step so we catch blockers
             // that are between the flashlight and the scattering point
@@ -87,7 +103,8 @@ vec3 get_flashlight_volumetrics(vec3 frag_dir, float max_dist, float sky_exposur
                 0
                 ).x;
 
-                if (scene_depth < 1.0 - 1e-5 && scene_depth != 0.0) {
+                if (scene_depth < 1.0 - 1e-5 && scene_depth != 0.0
+                && scene_depth >= hand_depth) {
                     float z_mid    = screen_to_view_space_depth(gbufferProjectionInverse, mid_screen.z);
                     float z_sample = screen_to_view_space_depth(gbufferProjectionInverse, scene_depth);
                     const float z_tol = 8.0;
@@ -105,7 +122,7 @@ vec3 get_flashlight_volumetrics(vec3 frag_dir, float max_dist, float sky_exposur
         result += fl_col * (cone * falloff * vol_shadow * 0.004 * FLASHLIGHT_INTENSITY * step_size);
 
         // --- Dust particle ---
-        vec3 sample_world = cameraPosition + frag_dir * t;
+        vec3 sample_world = fl_origin + fl_dir * t;
         vec3 cell  = floor(sample_world);
         float base = fl_vol_hash(cell);
 
