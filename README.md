@@ -8,34 +8,42 @@ All original Photon features are preserved. This fork adds a directional spotlig
 
 - **Directional flashlight beam** — smooth cone with feathered edges and a bright central hotspot
 - **16 beam colors** — driven by which flashlight item variant is held
-- **Smooth on/off fade** — beam transitions gracefully via `shaders.properties` custom uniforms
+- **Smooth on/off fade** — beam transitions gracefully when toggling or switching items
 - **Beam lag** — slight directional lag for a weighty, realistic feel
 - **Volumetric glow** — subtle air brightening along the beam path
 - **Dust particles** — animated square 1px particles drifting through the beam, with density scaling based on indoor/outdoor environment
+- **Multiplayer beams** — other players' flashlight beams rendered in your world (up to 4 simultaneous)
 
-## New Shader Settings (under Lighting)
+## Enabling Flashlight Features
 
-| Setting | Description |
-|---------|-------------|
-| `FLASHLIGHT` | Enable/disable the beam |
-| `FLASHLIGHT_INTENSITY` | Brightness |
-| `FLASHLIGHT_DISTANCE` | Reach |
-| `FLASHLIGHT_RADIUS` | Cone width |
-| `FLASHLIGHT_VOLUMETRIC` | Volumetric glow + particles |
-| `FLASHLIGHT_VOL_STEPS` | Volumetric quality |
-| `FLASHLIGHT_PARTICLE_DENSITY` | Particle count |
-| `FLASHLIGHT_PARTICLE_CLUSTERING` | Particle clustering amount |
+All flashlight settings are **off by default**. To enable them, go to:
+
+**Video Settings → Shader Packs → Shader Options → Lighting**
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `FLASHLIGHT` | Off     | Enable/disable the directional beam — **turn this on first** |
+| `FLASHLIGHT_INTENSITY` | 2.25    | Beam brightness |
+| `FLASHLIGHT_DISTANCE` | 1.50    | How far the beam reaches |
+| `FLASHLIGHT_RADIUS` | 1.25    | Cone width |
+| `FLASHLIGHT_VOLUMETRIC` | Off     | Volumetric glow + dust particles |
+| `FLASHLIGHT_VOL_STEPS` | 8       | Volumetric quality (higher = better, more expensive) |
+| `FLASHLIGHT_PARTICLE_DENSITY` | 1.00    | Amount of dust particles |
+| `FLASHLIGHT_PARTICLE_CLUSTERING` | 0.80    | How much particles clump together |
+| `FLASHLIGHT_MULTIPLAYER` | Off     | Render other players' beams (requires OpenGL 4.3, not supported on macOS) |
 
 ## Requirements
 
 - [Iris Shaders](https://modrinth.com/mod/iris) >= 1.5
-- [Flashlight Mod](https://github.com/StewyDev65/JohnnyFlashlightMod) for the item and toggle logic
+- [Sodium](https://modrinth.com/mod/sodium) — recommended, ships with Iris by default
+- [Flashlight Mod](https://github.com/StewyDev65/JohnnyFlashlightMod) — required for the item, toggle logic, and multiplayer data
 
 ## Installation
 
 1. Download the latest zip from [Releases](https://github.com/StewyDev65/photon-flashlight/releases)
-2. Place it in `.minecraft/shaderpacks`
-3. Select it in **Video Settings → Shader Packs**
+2. Place the zip in `.minecraft/shaderpacks`
+3. In-game, go to **Video Settings → Shader Packs** and select it
+4. Open **Shader Options → Lighting** and enable `FLASHLIGHT` to activate the beam
 
 ## Credits
 
