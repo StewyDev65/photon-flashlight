@@ -86,6 +86,56 @@ uniform vec3  flashlight_look_dir;
 uniform vec3 playerLookVector; // world-space head look direction (Iris exclusive)
 #endif
 
+#if defined FLASHLIGHT_SHADOWS && defined IS_IRIS
+float get_other_flashlight_shadow(vec3 scene_pos, vec3 other_eye_scene, vec3 other_look) {
+    vec3 look     = normalize(other_look);
+    vec3 fl_right = normalize(cross(look, vec3(0.0, 1.0, 0.0)));
+    vec3 fl_up    = normalize(cross(fl_right, look));
+
+    vec3 hand_offset = fl_right *  FL_HAND_OFFSET.x
+    + fl_up    *  FL_HAND_OFFSET.y
+    + look     * -FL_HAND_OFFSET.z;
+
+    vec3 fl_source_view = scene_to_view_space(other_eye_scene + hand_offset);
+    vec3 frag_view      = scene_to_view_space(scene_pos);
+
+    float dither = texelFetch(noisetex, ivec2(gl_FragCoord.xy) & 511, 0).b;
+    dither = r1(frameCounter, dither);
+
+    const float t_max       = 0.92;
+    const float z_tolerance = 8.0;
+
+    for (int i = 0; i < FLASHLIGHT_SHADOW_STEPS; i++) {
+        float t = (float(i) + 0.5 + dither * 0.5)
+        * (t_max / float(FLASHLIGHT_SHADOW_STEPS));
+
+        vec3 sample_view   = fl_source_view + t * (frag_view - fl_source_view);
+        vec3 sample_screen = view_to_screen_space(sample_view, true);
+
+        if (clamp01(sample_screen) != sample_screen) continue;
+
+        float scene_depth = texelFetch(
+        depthtex1,
+        ivec2(sample_screen.xy * view_res * taau_render_scale),
+        0
+        ).x;
+
+        if (scene_depth >= 1.0 - 1e-5 || scene_depth == 0.0) continue;
+        if (scene_depth < hand_depth) continue;
+
+        float z_ray    = screen_to_view_space_depth(gbufferProjectionInverse, sample_screen.z);
+        float z_sample = screen_to_view_space_depth(gbufferProjectionInverse, scene_depth);
+
+        bool hit = scene_depth < sample_screen.z
+        && abs(z_tolerance - (z_ray - z_sample)) < z_tolerance;
+
+        if (hit) return 0.0;
+    }
+
+    return 1.0;
+}
+#endif // FLASHLIGHT_SHADOWS && IS_IRIS
+
 #ifdef FLASHLIGHT_MULTIPLAYER
 
 vec3 get_other_flashlights_lighting(vec3 scene_pos, vec3 normal, float ao) {
@@ -124,7 +174,14 @@ vec3 get_other_flashlights_lighting(vec3 scene_pos, vec3 normal, float ao) {
 
         float NdotL = max0(dot(normal, -frag_dir));
 
-        total += col * blocklight_scale * cone * hotspot * falloff * NdotL * FLASHLIGHT_INTENSITY * act;
+        // Shadow
+        float other_shadow = 1.0;
+#ifdef FLASHLIGHT_SHADOWS
+        other_shadow = get_other_flashlight_shadow(scene_pos, player_pos, look);
+#endif
+
+        total += col * blocklight_scale * cone * hotspot * falloff * NdotL
+                * FLASHLIGHT_INTENSITY * act * other_shadow;
     }
 
     return total;

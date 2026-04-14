@@ -241,7 +241,39 @@ vec3 get_other_flashlight_volumetrics(vec3 frag_dir, float max_dist) {
             float scaled = dist / FLASHLIGHT_DISTANCE;
             float falloff = 1.0 / (scaled * scaled * 0.5 + 1.0);
 
-            total += col * (cone * falloff * 0.004 * FLASHLIGHT_INTENSITY * step_size * pl_active);
+            float other_vol_shadow = 1.0;
+#ifdef FLASHLIGHT_SHADOWS
+            {
+                vec3 o_look     = normalize(look);
+                vec3 o_right    = normalize(cross(o_look, vec3(0.0, 1.0, 0.0)));
+                vec3 o_up       = normalize(cross(o_right, o_look));
+                vec3 o_offset   = o_right *  FL_HAND_OFFSET.x
+                    + o_up    *  FL_HAND_OFFSET.y
+                    + o_look  * -FL_HAND_OFFSET.z;
+
+                // player_world is already in world space, convert source to view
+                vec3 o_source_view = scene_to_view_space(
+                    (player_world - cameraPosition) + o_offset
+                );
+                vec3 o_step_view = scene_to_view_space(sample_world - cameraPosition);
+                vec3 o_mid_view  = o_source_view + 0.6 * (o_step_view - o_source_view);
+                vec3 o_mid_screen = view_to_screen_space(o_mid_view, true);
+
+                if (clamp01(o_mid_screen) == o_mid_screen) {
+                    float sd = texelFetch(depthtex1,
+                        ivec2(o_mid_screen.xy * view_res * taau_render_scale), 0).x;
+
+                    if (sd < 1.0 - 1e-5 && sd != 0.0 && sd >= hand_depth) {
+                        float z_mid = screen_to_view_space_depth(gbufferProjectionInverse, o_mid_screen.z);
+                        float z_sd  = screen_to_view_space_depth(gbufferProjectionInverse, sd);
+                        if (sd < o_mid_screen.z && abs(8.0 - (z_mid - z_sd)) < 8.0)
+                            other_vol_shadow = 0.0;
+                    }
+                }
+            }
+#endif
+            total += col * (cone * falloff * 0.004 * FLASHLIGHT_INTENSITY
+                    * step_size * pl_active * other_vol_shadow);
         }
     }
 
