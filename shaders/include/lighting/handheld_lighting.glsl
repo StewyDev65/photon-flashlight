@@ -68,6 +68,10 @@ vec3 get_handheld_lighting(vec3 scene_pos, float ao) {
 
 #ifdef FLASHLIGHT
 
+// Flashlight origin in view space — tune all three values here.
+// +X = right,  +Y = up,  -Z = forward (OpenGL convention)
+#define FL_HAND_OFFSET vec3(FL_OFFSET_X, FL_OFFSET_Y, FL_OFFSET_Z)
+
 // Cosine of cone half-angles for the flashlight beam.
 // Outer edge  (~30°): cos(30°) ≈ 0.866 — where beam fully fades out
 // Inner hotspot (~12°): cos(12°) ≈ 0.978 — where the bright center begins
@@ -140,7 +144,7 @@ float get_flashlight_shadow(vec3 scene_pos) {
     //   • Larger XY offset → more visible shadow displacement from caster.
     //   • Larger −Z → source projects onto screen sooner, more usable steps.
     //   • Keep −Z ≥ 0.2 to stay well past the near-clip plane.
-    const vec3 fl_source_view = vec3(0.30, -0.20, -0.25);
+    const vec3 fl_source_view = FL_HAND_OFFSET;
 
     // Fragment in view space
     vec3 frag_view = scene_to_view_space(scene_pos);
@@ -214,7 +218,9 @@ vec3 get_flashlight_lighting(vec3 scene_pos, vec3 normal, float ao) {
     outer_cutoff = clamp(outer_cutoff, 0.0, 0.999);
     inner_cutoff = clamp(inner_cutoff, outer_cutoff + 0.001, 1.0);
 
-    vec3 pos = scene_pos + relativeEyePosition;
+    // Rotate the view-space hand offset into scene space and shift origin
+    vec3 hand_scene = mat3(gbufferModelViewInverse) * FL_HAND_OFFSET;
+    vec3 pos = scene_pos - hand_scene;
 
     float dist_sq = dot(pos, pos);
     float dist    = sqrt(dist_sq);
