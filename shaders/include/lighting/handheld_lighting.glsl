@@ -1,6 +1,11 @@
 #ifndef INCLUDE_LIGHTING_HANDHELD_LIGHTING
 #define INCLUDE_LIGHTING_HANDHELD_LIGHTING
 
+#ifdef FLASHLIGHT_SHADOWS
+#include "/include/utility/random.glsl"
+#include "/include/utility/space_conversion.glsl"
+#endif
+
 // SSBO must be at global scope — Iris transformer rejects buffer blocks inside #ifdef
 layout(std430, binding = 1) buffer OtherFlashlightBuffer {
     float data[40];
@@ -122,33 +127,113 @@ vec3 get_other_flashlights_lighting(vec3 scene_pos, vec3 normal, float ao) {
 }
 #endif // FLASHLIGHT_MULTIPLAYER
 
+#ifdef FLASHLIGHT_SHADOWS
+
+// ─────────────────────────────────────────────────────────────────────────────
+// get_flashlight_shadow — SSRT occlusion test for the player flashlight.
+// ─────────────────────────────────────────────────────────────────────────────
+float get_flashlight_shadow(vec3 scene_pos) {
+    // View-space position of the flashlight source.
+    // Mirrors a right-hand hold: 0.3 blocks right (+X), 0.2 blocks down (−Y),
+    // 0.25 blocks forward (−Z, into the scene in GL view convention).
+    // Tuning notes:
+    //   • Larger XY offset → more visible shadow displacement from caster.
+    //   • Larger −Z → source projects onto screen sooner, more usable steps.
+    //   • Keep −Z ≥ 0.2 to stay well past the near-clip plane.
+    const vec3 fl_source_view = vec3(0.30, -0.20, -0.25);
+
+    // Fragment in view space
+    vec3 frag_view = scene_to_view_space(scene_pos);
+
+    // Temporal blue-noise dither — animates per frame to allow TAA to
+    // smooth out the hard 0/1 result over time (same technique as SSRT sun).
+    float dither = texelFetch(noisetex, ivec2(gl_FragCoord.xy) & 511, 0).b;
+    dither = r1(frameCounter, dither);
+
+    // Stop at 92 % of the ray to avoid the fragment shadowing itself.
+    // The dither adds ±0.5 steps of jitter, so we need a safe margin.
+    const float t_max       = 0.92;
+    const float z_tolerance = 8.0; // assumed scene geometry thickness (blocks)
+    // matches ssrt.glsl's value
+
+    for (int i = 0; i < FLASHLIGHT_SHADOW_STEPS; i++) {
+        // Distribute steps evenly from 0 → t_max, with temporal jitter
+        float t = (float(i) + 0.5 + dither * 0.5)
+        * (t_max / float(FLASHLIGHT_SHADOW_STEPS));
+
+        // Lerp in view space along the flashlight-source → fragment ray
+        vec3 sample_view   = fl_source_view + t * (frag_view - fl_source_view);
+
+        // Project the view-space point to screen space [0,1]^3
+        vec3 sample_screen = view_to_screen_space(sample_view, true);
+
+        // Steps near t=0 (close to the source) project off-screen because the
+        // source's XY offset is large relative to its small Z magnitude. Skip
+        // them — the meaningful tests happen near the fragment end of the ray.
+        if (clamp01(sample_screen) != sample_screen) continue;
+
+        // Opaque depth at this screen position (depthtex1 = opaque-only, avoids
+        // water/glass falsely blocking the beam)
+        float scene_depth = texelFetch(
+        depthtex1,
+        ivec2(sample_screen.xy * view_res * taau_render_scale),
+        0
+        ).x;
+
+        // Skip sky/void pixels
+        if (scene_depth >= 1.0 - 1e-5 || scene_depth == 0.0) continue;
+
+        // Convert screen-space Z values to view-space distances (positive, away
+        // from camera) — same convention as ssrt.glsl
+        float z_ray    = screen_to_view_space_depth(gbufferProjectionInverse, sample_screen.z);
+        float z_sample = screen_to_view_space_depth(gbufferProjectionInverse, scene_depth);
+
+        // Hit condition (verbatim from ssrt.glsl / DrDesten's depth tolerance):
+        //   scene_depth < sample_screen.z → geometry in front of the ray
+        //   abs(z_tolerance − (z_ray − z_sample)) < z_tolerance
+        //     ↔  0 < z_ray − z_sample < 2 * z_tolerance
+        //     = geometry is between 0 and 2*z_tolerance blocks behind the ray
+        //       (the "slab" that avoids false hits through thin walls)
+        bool hit = scene_depth < sample_screen.z
+        && abs(z_tolerance - (z_ray - z_sample)) < z_tolerance;
+
+        if (hit) return 0.0;
+    }
+
+    return 1.0;
+}
+
+#endif
+
 vec3 get_flashlight_lighting(vec3 scene_pos, vec3 normal, float ao) {
 #ifndef IS_IRIS
     return vec3(0.0);
 #else
-	// Wider radius = lower cosine threshold = bigger cone.
-    // At FLASHLIGHT_RADIUS 1.0 these equal the original hardcoded values.
     float outer_cutoff = 1.0 - (1.0 - 0.866) * FLASHLIGHT_RADIUS;
     float inner_cutoff = 1.0 - (1.0 - 0.978) * FLASHLIGHT_RADIUS;
     outer_cutoff = clamp(outer_cutoff, 0.0, 0.999);
     inner_cutoff = clamp(inner_cutoff, outer_cutoff + 0.001, 1.0);
-	
-    // Both scene_pos and playerLookVector are in scene/world space — no transform needed
+
     vec3 pos = scene_pos + relativeEyePosition;
 
     float dist_sq = dot(pos, pos);
     float dist    = sqrt(dist_sq);
     vec3 frag_dir = pos * rcp(max(dist, 1e-5));
 
-    // playerLookVector is world-aligned — use directly, no matrix needed
     float cos_theta = dot(normalize(flashlight_look_dir), frag_dir);
 
     float cone = smoothstep(outer_cutoff, inner_cutoff, cos_theta);
     if (cone < 1e-4) return vec3(0.0);
 
+    // ─── Flashlight shadow ────────────────────────────────────────────────
+#if defined FLASHLIGHT_SHADOWS && defined IS_IRIS
+    float fl_shadow = get_flashlight_shadow(scene_pos);
+    if (fl_shadow < 0.5) return vec3(0.0);
+#endif
+    // ─────────────────────────────────────────────────────────────────────
+
     float hotspot = 1.0 + 0.5 * smoothstep(inner_cutoff, 1.0, cos_theta);
 
-    // Scale distance by FLASHLIGHT_DISTANCE — higher value = light reaches further
     float scaled_dist_sq = dist_sq * rcp(FLASHLIGHT_DISTANCE * FLASHLIGHT_DISTANCE);
     float falloff = lift(rcp(scaled_dist_sq + 1.0), 1.2);
     falloff *= mix(ao, 1.0, falloff * falloff);

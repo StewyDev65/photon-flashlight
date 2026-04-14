@@ -46,9 +46,45 @@ vec3 get_flashlight_volumetrics(vec3 frag_dir, float max_dist, float sky_exposur
         float scaled_t = t / FLASHLIGHT_DISTANCE;
         float falloff   = 1.0 / (scaled_t * scaled_t * 0.5 + 1.0);
 
-        // --- Volumetric glow ---
-        // Subtle uniform brightening of air within the beam
-        result += fl_col * (cone * falloff * 0.004 * FLASHLIGHT_INTENSITY * step_size);
+        // ─── Per-step shadow: single depth test projected from flashlight source ──
+        float vol_shadow = 1.0;
+        #ifdef FLASHLIGHT_SHADOWS
+        {
+            const vec3 fl_source_view = vec3(0.30, -0.20, -0.25); // must match handheld_lighting.glsl
+
+            // View-space position of this volumetric sample
+            // frag_dir is world-space, scene_to_view_space needs scene-space:
+            // scene = frag_dir * t (cameraPosition cancels since it's relative)
+            vec3 step_view = scene_to_view_space(frag_dir * t);
+
+            // Sample the midpoint between source and step so we catch blockers
+            // that are between the flashlight and the scattering point
+            vec3 mid_view   = fl_source_view + 0.6 * (step_view - fl_source_view);
+            vec3 mid_screen = view_to_screen_space(mid_view, true);
+
+            if (clamp01(mid_screen) == mid_screen) {
+                float scene_depth = texelFetch(
+                depthtex1,
+                ivec2(mid_screen.xy * view_res * taau_render_scale),
+                0
+                ).x;
+
+                if (scene_depth < 1.0 - 1e-5 && scene_depth != 0.0) {
+                    float z_mid    = screen_to_view_space_depth(gbufferProjectionInverse, mid_screen.z);
+                    float z_sample = screen_to_view_space_depth(gbufferProjectionInverse, scene_depth);
+                    const float z_tol = 8.0;
+
+                    if (scene_depth < mid_screen.z
+                    && abs(z_tol - (z_mid - z_sample)) < z_tol) {
+                        vol_shadow = 0.0;
+                    }
+                }
+            }
+        }
+        #endif
+        // ─────────────────────────────────────────────────────────────────────────
+
+        result += fl_col * (cone * falloff * vol_shadow * 0.004 * FLASHLIGHT_INTENSITY * step_size);
 
         // --- Dust particle ---
         vec3 sample_world = cameraPosition + frag_dir * t;
@@ -111,7 +147,7 @@ vec3 get_flashlight_volumetrics(vec3 frag_dir, float max_dist, float sky_exposur
                             float p_fall   = 1.0 / (p_scaled * p_scaled * 0.5 + 1.0);
 
                             result += fl_col
-                                * (p_cone * p_fall * life * 0.10 * FLASHLIGHT_INTENSITY);
+                                * (p_cone * p_fall * life * 0.10 * FLASHLIGHT_INTENSITY * vol_shadow);
                         }
                     }
                 }
@@ -139,8 +175,8 @@ vec3 get_other_flashlight_volumetrics(vec3 frag_dir, float max_dist) {
 
         for (int pi = 0; pi < 4; pi++) {
             int   base   = pi * 10;
-            float active = fl_other_vol.data[base + 9];
-            if (active < 0.001) continue;
+            float pl_active = fl_other_vol.data[base + 9];
+            if (pl_active < 0.001) continue;
 
             vec3 player_world = vec3(
                 fl_other_vol.data[base],
@@ -170,7 +206,7 @@ vec3 get_other_flashlight_volumetrics(vec3 frag_dir, float max_dist) {
             float scaled = dist / FLASHLIGHT_DISTANCE;
             float falloff = 1.0 / (scaled * scaled * 0.5 + 1.0);
 
-            total += col * (cone * falloff * 0.004 * FLASHLIGHT_INTENSITY * step_size * active);
+            total += col * (cone * falloff * 0.004 * FLASHLIGHT_INTENSITY * step_size * pl_active);
         }
     }
 
