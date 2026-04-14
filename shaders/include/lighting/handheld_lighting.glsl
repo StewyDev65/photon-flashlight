@@ -1,6 +1,11 @@
 #ifndef INCLUDE_LIGHTING_HANDHELD_LIGHTING
 #define INCLUDE_LIGHTING_HANDHELD_LIGHTING
 
+// SSBO must be at global scope — Iris transformer rejects buffer blocks inside #ifdef
+layout(std430, binding = 1) buffer OtherFlashlightBuffer {
+    float data[40];
+} fl_other;
+
 #ifdef COLORED_LIGHTS
 uniform sampler2D light_data_sampler;
 #endif
@@ -71,6 +76,51 @@ uniform vec3  flashlight_look_dir;
 #ifdef IS_IRIS
 uniform vec3 playerLookVector; // world-space head look direction (Iris exclusive)
 #endif
+
+#ifdef FLASHLIGHT_MULTIPLAYER
+
+vec3 get_other_flashlights_lighting(vec3 scene_pos, vec3 normal, float ao) {
+    vec3 total = vec3(0.0);
+
+    float outer_cutoff = 1.0 - (1.0 - 0.866) * FLASHLIGHT_RADIUS;
+    float inner_cutoff = 1.0 - (1.0 - 0.978) * FLASHLIGHT_RADIUS;
+    outer_cutoff = clamp(outer_cutoff, 0.0, 0.999);
+    inner_cutoff = clamp(inner_cutoff, outer_cutoff + 0.001, 1.0);
+
+    for (int i = 0; i < 4; i++) {
+        int base  = i * 10;
+        float act = fl_other.data[base + 9];
+        if (act < 0.001) continue;
+
+        // Player eye is stored in scene space (world - cameraPos, computed each frame in Java)
+        vec3 player_pos = vec3(fl_other.data[base],     fl_other.data[base + 1], fl_other.data[base + 2]);
+        vec3 look       = normalize(vec3(fl_other.data[base + 3], fl_other.data[base + 4], fl_other.data[base + 5]));
+        vec3 col        = vec3(fl_other.data[base + 6], fl_other.data[base + 7], fl_other.data[base + 8]);
+
+        // Fragment relative to this player's eye
+        vec3  pos      = scene_pos - player_pos;
+        float dist_sq  = dot(pos, pos);
+        float dist     = sqrt(dist_sq);
+        vec3  frag_dir = pos * rcp(max(dist, 1e-5));
+
+        float cos_theta = dot(look, frag_dir);
+        float cone = smoothstep(outer_cutoff, inner_cutoff, cos_theta);
+        if (cone < 1e-4) continue;
+
+        float hotspot = 1.0 + 0.5 * smoothstep(inner_cutoff, 1.0, cos_theta);
+
+        float scaled_dist_sq = dist_sq * rcp(FLASHLIGHT_DISTANCE * FLASHLIGHT_DISTANCE);
+        float falloff = lift(rcp(scaled_dist_sq + 1.0), 1.2);
+        falloff *= mix(ao, 1.0, falloff * falloff);
+
+        float NdotL = max0(dot(normal, -frag_dir));
+
+        total += col * blocklight_scale * cone * hotspot * falloff * NdotL * FLASHLIGHT_INTENSITY * act;
+    }
+
+    return total;
+}
+#endif // FLASHLIGHT_MULTIPLAYER
 
 vec3 get_flashlight_lighting(vec3 scene_pos, vec3 normal, float ao) {
 #ifndef IS_IRIS

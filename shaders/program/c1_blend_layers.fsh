@@ -15,6 +15,8 @@
 --------------------------------------------------------------------------------
 */
 
+#extension GL_ARB_shader_storage_buffer_object : enable
+
 #include "/include/global.glsl"
 
 layout(location = 0) out vec3 fragment_color;
@@ -155,9 +157,7 @@ uniform mat4 shadowModelViewInverse;
 #include "/include/misc/distant_water.glsl"
 #endif
 
-#ifdef FLASHLIGHT_VOLUMETRIC
 #include "/include/lighting/flashlight_volumetrics.glsl"
-#endif
 
 vec3 blend_layers_with_fog(
     vec3 background_color,
@@ -440,6 +440,9 @@ void main() {
     // Flashlight volumetric beam + dust particles
 #ifdef FLASHLIGHT_VOLUMETRIC
     fragment_color += get_flashlight_volumetrics(direction_world, view_distance, eye_skylight);
+#ifdef FLASHLIGHT_MULTIPLAYER
+    fragment_color += get_other_flashlight_volumetrics(direction_world, view_distance);
+#endif
 #endif
 
     // Blend clouds in front of translucents

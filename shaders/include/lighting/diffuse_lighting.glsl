@@ -1,6 +1,8 @@
 #if !defined INCLUDE_LIGHTING_DIFFUSE_LIGHTING
 #define INCLUDE_LIGHTING_DIFFUSE_LIGHTING
 
+#extension GL_ARB_shader_storage_buffer_object : enable
+
 #include "/include/lighting/bsdf.glsl"
 #include "/include/lighting/colors/blocklight_color.glsl"
 #include "/include/misc/end_lighting_fix.glsl"
@@ -276,6 +278,10 @@ vec3 get_diffuse_lighting(
 
 #ifdef FLASHLIGHT
     lighting += get_flashlight_lighting(scene_pos, normal, ao) * flashlight_active;
+#endif
+
+#ifdef FLASHLIGHT_MULTIPLAYER
+    lighting += get_other_flashlights_lighting(scene_pos, normal, ao);
 #endif
 
     lighting += material.emission * emission_scale;

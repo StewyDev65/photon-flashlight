@@ -1,6 +1,10 @@
 #if !defined INCLUDE_LIGHTING_FLASHLIGHT_VOLUMETRICS
 #define INCLUDE_LIGHTING_FLASHLIGHT_VOLUMETRICS
 
+layout(std430, binding = 1) buffer OtherFlashlightVolBuffer {
+    float data[40];
+} fl_other_vol;
+
 uniform float flashlight_active;
 uniform float flashlight_color_r;
 uniform float flashlight_color_g;
@@ -117,5 +121,61 @@ vec3 get_flashlight_volumetrics(vec3 frag_dir, float max_dist, float sky_exposur
 
     return result * flashlight_active;
 }
+
+#ifdef FLASHLIGHT_MULTIPLAYER
+
+vec3 get_other_flashlight_volumetrics(vec3 frag_dir, float max_dist) {
+    vec3 total = vec3(0.0);
+
+    float outer = clamp(1.0 - (1.0 - 0.866) * FLASHLIGHT_RADIUS, 0.0, 0.999);
+    float inner = clamp(1.0 - (1.0 - 0.978) * FLASHLIGHT_RADIUS, outer + 0.001, 1.0);
+
+    float march_dist = min(max_dist, 12.0 * FLASHLIGHT_DISTANCE);
+    float step_size  = march_dist / float(FLASHLIGHT_VOL_STEPS);
+
+    for (int s = 0; s < FLASHLIGHT_VOL_STEPS; s++) {
+        float t = (float(s) + 0.5) * step_size;
+        vec3 sample_world = cameraPosition + frag_dir * t;
+
+        for (int pi = 0; pi < 4; pi++) {
+            int   base   = pi * 10;
+            float active = fl_other_vol.data[base + 9];
+            if (active < 0.001) continue;
+
+            vec3 player_world = vec3(
+                fl_other_vol.data[base],
+                fl_other_vol.data[base + 1],
+                fl_other_vol.data[base + 2]
+            ) + cameraPosition;
+
+            vec3 look = normalize(vec3(
+                fl_other_vol.data[base + 3],
+                fl_other_vol.data[base + 4],
+                fl_other_vol.data[base + 5]
+            ));
+            vec3 col = vec3(
+                fl_other_vol.data[base + 6],
+                fl_other_vol.data[base + 7],
+                fl_other_vol.data[base + 8]
+            );
+
+            vec3  to_sample  = sample_world - player_world;
+            float dist       = length(to_sample);
+            vec3  sample_dir = to_sample / max(dist, 1e-5);
+
+            float cos_ray = dot(look, sample_dir);
+            float cone    = smoothstep(outer, inner, cos_ray);
+            if (cone < 0.001) continue;
+
+            float scaled = dist / FLASHLIGHT_DISTANCE;
+            float falloff = 1.0 / (scaled * scaled * 0.5 + 1.0);
+
+            total += col * (cone * falloff * 0.004 * FLASHLIGHT_INTENSITY * step_size * active);
+        }
+    }
+
+    return total;
+}
+#endif // FLASHLIGHT_MULTIPLAYER
 
 #endif // INCLUDE_LIGHTING_FLASHLIGHT_VOLUMETRICS

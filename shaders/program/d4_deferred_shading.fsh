@@ -9,6 +9,8 @@
 --------------------------------------------------------------------------------
 */
 
+#extension GL_ARB_shader_storage_buffer_object : enable
+
 #include "/include/global.glsl"
 
 layout(location = 0) out vec3 fragment_color;
