@@ -137,14 +137,17 @@ vec3 get_other_flashlights_lighting(vec3 scene_pos, vec3 normal, float ao) {
 // get_flashlight_shadow — SSRT occlusion test for the player flashlight.
 // ─────────────────────────────────────────────────────────────────────────────
 float get_flashlight_shadow(vec3 scene_pos) {
-    // View-space position of the flashlight source.
-    // Mirrors a right-hand hold: 0.3 blocks right (+X), 0.2 blocks down (−Y),
-    // 0.25 blocks forward (−Z, into the scene in GL view convention).
-    // Tuning notes:
-    //   • Larger XY offset → more visible shadow displacement from caster.
-    //   • Larger −Z → source projects onto screen sooner, more usable steps.
-    //   • Keep −Z ≥ 0.2 to stay well past the near-clip plane.
-    const vec3 fl_source_view = FL_HAND_OFFSET;
+    // Rebuild hand position in scene space using player orientation (same as get_flashlight_lighting)
+    vec3 fl_fwd   = normalize(flashlight_look_dir);
+    vec3 fl_right = normalize(cross(fl_fwd, vec3(0.0, 1.0, 0.0)));
+    vec3 fl_up    = normalize(cross(fl_right, fl_fwd));
+
+    vec3 hand_offset = fl_right *  FL_HAND_OFFSET.x
+    + fl_up    *  FL_HAND_OFFSET.y
+    + fl_fwd   * -FL_HAND_OFFSET.z;
+
+    // Convert hand scene-space position to view space for the depth buffer raymarch
+    vec3 fl_source_view = scene_to_view_space(-relativeEyePosition + hand_offset);
 
     // Fragment in view space
     vec3 frag_view = scene_to_view_space(scene_pos);
@@ -218,9 +221,21 @@ vec3 get_flashlight_lighting(vec3 scene_pos, vec3 normal, float ao) {
     outer_cutoff = clamp(outer_cutoff, 0.0, 0.999);
     inner_cutoff = clamp(inner_cutoff, outer_cutoff + 0.001, 1.0);
 
-    // Rotate the view-space hand offset into scene space and shift origin
-    vec3 hand_scene = mat3(gbufferModelViewInverse) * FL_HAND_OFFSET;
-    vec3 pos = scene_pos - hand_scene;
+    // Build a coordinate frame from the player's look direction, not the camera
+    vec3 fl_fwd   = normalize(flashlight_look_dir);
+    vec3 fl_right = normalize(cross(fl_fwd, vec3(0.0, 1.0, 0.0)));
+    vec3 fl_up    = normalize(cross(fl_right, fl_fwd));
+
+    // Translate FL_HAND_OFFSET (X=right, Y=up, -Z=forward) into scene space
+    // using the player's own orientation axes
+    vec3 hand_offset = fl_right *  FL_HAND_OFFSET.x
+    + fl_up    *  FL_HAND_OFFSET.y
+    + fl_fwd   * -FL_HAND_OFFSET.z;
+
+    // Player eye in scene space is -relativeEyePosition
+    // (relativeEyePosition = cameraPos - eyePos, so eyePos in scene = -relativeEyePosition)
+    vec3 light_origin = -relativeEyePosition + hand_offset;
+    vec3 pos = scene_pos - light_origin;
 
     float dist_sq = dot(pos, pos);
     float dist    = sqrt(dist_sq);

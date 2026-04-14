@@ -11,6 +11,8 @@ uniform float flashlight_color_g;
 uniform float flashlight_color_b;
 uniform vec3  flashlight_look_dir;
 
+uniform vec3 relativeEyePosition;
+
 #ifdef FLASHLIGHT
 
 // Flashlight origin in view space — tune all three values here.
@@ -58,7 +60,15 @@ vec3 get_flashlight_volumetrics(vec3 frag_dir, float max_dist, float sky_exposur
         float vol_shadow = 1.0;
         #ifdef FLASHLIGHT_SHADOWS
         {
-            const vec3 fl_source_view = FL_HAND_OFFSET; // keep in sync with FL_HAND_OFFSET in handheld_lighting.glsl
+            vec3 fl_fwd   = normalize(flashlight_look_dir);
+            vec3 fl_right = normalize(cross(fl_fwd, vec3(0.0, 1.0, 0.0)));
+            vec3 fl_up    = normalize(cross(fl_right, fl_fwd));
+
+            vec3 hand_offset = fl_right *  FL_HAND_OFFSET.x
+                    + fl_up    *  FL_HAND_OFFSET.y
+                    + fl_fwd   * -FL_HAND_OFFSET.z;
+
+            vec3 fl_source_view = scene_to_view_space(-relativeEyePosition + hand_offset);
 
             // View-space position of this volumetric sample
             // frag_dir is world-space, scene_to_view_space needs scene-space:
