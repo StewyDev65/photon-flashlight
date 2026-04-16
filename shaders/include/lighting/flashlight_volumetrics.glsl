@@ -12,6 +12,7 @@ uniform float flashlight_color_b;
 uniform vec3  flashlight_look_dir;
 
 uniform vec3 relativeEyePosition;
+uniform sampler2D colortex1;
 
 #ifdef FLASHLIGHT
 
@@ -49,10 +50,10 @@ vec3 get_flashlight_volumetrics(vec3 frag_dir, float max_dist, float sky_exposur
 
     // March from fl_origin toward the fragment — cone is then constant for all
     // samples (parallel beam), eliminating the ghost beam artifact
-    vec3 frag_world  = cameraPosition + frag_dir * min(max_dist, 12.0 * FLASHLIGHT_DISTANCE);
-    vec3 fl_to_frag  = frag_world - fl_origin;
+    vec3 frag_world     = cameraPosition + frag_dir * min(max_dist, 12.0 * FLASHLIGHT_DISTANCE);
+    vec3 fl_to_frag     = frag_world - fl_origin;
     float fl_march_dist = length(fl_to_frag);
-    vec3 fl_dir      = fl_to_frag / max(fl_march_dist, 1e-5);
+    vec3 fl_dir         = fl_to_frag / max(fl_march_dist, 1e-5);
 
     // Cone computed once — constant since we march in a fixed direction from fl_origin
     float cos_ray = dot(look, fl_dir);
@@ -76,7 +77,7 @@ vec3 get_flashlight_volumetrics(vec3 frag_dir, float max_dist, float sky_exposur
         float falloff  = 1.0 / (scaled_t * scaled_t * 0.5 + 1.0);
 
         // ─── Per-step shadow: single depth test projected from flashlight source ──
-        float vol_shadow = 1.0;
+        vec3 vol_shadow = vec3(1.0);
         #ifdef FLASHLIGHT_SHADOWS
         {
             vec3 fl_fwd   = normalize(flashlight_look_dir);
@@ -84,12 +85,11 @@ vec3 get_flashlight_volumetrics(vec3 frag_dir, float max_dist, float sky_exposur
             vec3 fl_up    = normalize(cross(fl_right, fl_fwd));
 
             vec3 hand_offset = fl_right *  FL_HAND_OFFSET.x
-                    + fl_up    *  FL_HAND_OFFSET.y
-                    + fl_fwd   * -FL_HAND_OFFSET.z;
+            + fl_up    *  FL_HAND_OFFSET.y
+            + fl_fwd   * -FL_HAND_OFFSET.z;
 
             vec3 fl_source_view = scene_to_view_space(-relativeEyePosition + hand_offset);
-
-            vec3 step_view = scene_to_view_space((fl_origin - cameraPosition) + fl_dir * t);
+            vec3 step_view      = scene_to_view_space((fl_origin - cameraPosition) + fl_dir * t);
 
             // Sample the midpoint between source and step so we catch blockers
             // that are between the flashlight and the scattering point
@@ -97,22 +97,28 @@ vec3 get_flashlight_volumetrics(vec3 frag_dir, float max_dist, float sky_exposur
             vec3 mid_screen = view_to_screen_space(mid_view, true);
 
             if (clamp01(mid_screen) == mid_screen) {
-                float scene_depth = texelFetch(
-                depthtex1,
-                ivec2(mid_screen.xy * view_res * taau_render_scale),
-                0
-                ).x;
+                ivec2 mid_texel = ivec2(mid_screen.xy * view_res * taau_render_scale);
 
-                if (scene_depth < 1.0 - 1e-5 && scene_depth != 0.0
-                && scene_depth >= hand_depth) {
-                    float z_mid    = screen_to_view_space_depth(gbufferProjectionInverse, mid_screen.z);
-                    float z_sample = screen_to_view_space_depth(gbufferProjectionInverse, scene_depth);
-                    const float z_tol = 8.0;
+                float depth_opaque      = texelFetch(depthtex1, mid_texel, 0).x;
+                float depth_translucent = texelFetch(depthtex0, mid_texel, 0).x;
+                float z_mid = screen_to_view_space_depth(gbufferProjectionInverse, mid_screen.z);
 
-                    if (scene_depth < mid_screen.z
-                    && abs(z_tol - (z_mid - z_sample)) < z_tol) {
-                        vol_shadow = 0.0;
+                // Opaque hit — full black shadow, keep z-tolerance check for thickness
+                if (depth_opaque < 1.0 - 1e-5 && depth_opaque != 0.0
+                && depth_opaque >= hand_depth && depth_opaque < mid_screen.z) {
+                    float z_opaque = screen_to_view_space_depth(gbufferProjectionInverse, depth_opaque);
+                    if (abs(8.0 - (z_mid - z_opaque)) < 8.0) {
+                        vol_shadow = vec3(0.0);
                     }
+                }
+                // Translucent hit — no z-tolerance needed, glass is a thin surface
+                // just confirm it's in front of the ray and closer than opaque geometry
+                else if (depth_translucent < depth_opaque
+                && depth_translucent < 1.0 - 1e-5 && depth_translucent != 0.0
+                && depth_translucent >= hand_depth
+                && depth_translucent < mid_screen.z) {
+                    vec3 tint = texelFetch(colortex1, mid_texel, 0).rgb;
+                    vol_shadow *= clamp(tint * 2.0, 0.0, 1.0);
                 }
             }
         }
@@ -134,8 +140,8 @@ vec3 get_flashlight_volumetrics(vec3 frag_dir, float max_dist, float sky_exposur
         float cluster_zone  = smoothstep(0.3, 0.7, coarse);
         float cluster_delta = 0.06 * FLASHLIGHT_PARTICLE_CLUSTERING;
         float cell_threshold = density_threshold
-            - cluster_delta * cluster_zone
-            + cluster_delta * (1.0 - cluster_zone);
+        - cluster_delta * cluster_zone
+        + cluster_delta * (1.0 - cluster_zone);
 
         // Gate 1: density + clustering
         if (base > clamp(cell_threshold, 0.0, 1.0)) {
@@ -149,14 +155,14 @@ vec3 get_flashlight_volumetrics(vec3 frag_dir, float max_dist, float sky_exposur
 
                 float life_t = fract(life_seed + frameTimeCounter * 0.08);
                 float life   = smoothstep(0.0, 0.15, life_t)
-                             * smoothstep(1.0, 0.85, life_t);
+                * smoothstep(1.0, 0.85, life_t);
 
                 if (life > 0.01) {
                     float drift_t = frameTimeCounter * 0.36 + drift_seed * 6.28;
                     vec3 p_world  = cell + 0.5 + vec3(
-                        (fl_vol_hash(cell + 0.1) - 0.5) * 0.5,
-                        sin(drift_t) * 0.10,
-                        (fl_vol_hash(cell + 0.3) - 0.5) * 0.5
+                    (fl_vol_hash(cell + 0.1) - 0.5) * 0.5,
+                    sin(drift_t) * 0.10,
+                    (fl_vol_hash(cell + 0.3) - 0.5) * 0.5
                     );
 
                     float p_proj = dot(p_world - cameraPosition, frag_dir);
@@ -169,7 +175,7 @@ vec3 get_flashlight_volumetrics(vec3 frag_dir, float max_dist, float sky_exposur
                         vec3 up    = normalize(cross(right, frag_dir));
 
                         float perp = max(abs(dot(perp_vec, right)),
-                                         abs(dot(perp_vec, up)));
+                        abs(dot(perp_vec, up)));
 
                         float pixel_threshold = max(p_proj * 0.005, 0.008);
 
@@ -182,7 +188,7 @@ vec3 get_flashlight_volumetrics(vec3 frag_dir, float max_dist, float sky_exposur
                             float p_fall   = 1.0 / (p_scaled * p_scaled * 0.5 + 1.0);
 
                             result += fl_col
-                                * (p_cone * p_fall * life * 0.10 * FLASHLIGHT_INTENSITY * vol_shadow);
+                            * (p_cone * p_fall * life * 0.10 * FLASHLIGHT_INTENSITY * vol_shadow);
                         }
                     }
                 }
@@ -209,25 +215,25 @@ vec3 get_other_flashlight_volumetrics(vec3 frag_dir, float max_dist) {
         vec3 sample_world = cameraPosition + frag_dir * t;
 
         for (int pi = 0; pi < 4; pi++) {
-            int   base   = pi * 10;
+            int   base      = pi * 10;
             float pl_active = fl_other_vol.data[base + 9];
             if (pl_active < 0.001) continue;
 
             vec3 player_world = vec3(
-                fl_other_vol.data[base],
-                fl_other_vol.data[base + 1],
-                fl_other_vol.data[base + 2]
+            fl_other_vol.data[base],
+            fl_other_vol.data[base + 1],
+            fl_other_vol.data[base + 2]
             ) + cameraPosition;
 
             vec3 look = normalize(vec3(
-                fl_other_vol.data[base + 3],
-                fl_other_vol.data[base + 4],
-                fl_other_vol.data[base + 5]
+            fl_other_vol.data[base + 3],
+            fl_other_vol.data[base + 4],
+            fl_other_vol.data[base + 5]
             ));
             vec3 col = vec3(
-                fl_other_vol.data[base + 6],
-                fl_other_vol.data[base + 7],
-                fl_other_vol.data[base + 8]
+            fl_other_vol.data[base + 6],
+            fl_other_vol.data[base + 7],
+            fl_other_vol.data[base + 8]
             );
 
             vec3  to_sample  = sample_world - player_world;
@@ -238,42 +244,58 @@ vec3 get_other_flashlight_volumetrics(vec3 frag_dir, float max_dist) {
             float cone    = smoothstep(outer, inner, cos_ray);
             if (cone < 0.001) continue;
 
-            float scaled = dist / FLASHLIGHT_DISTANCE;
+            float scaled  = dist / FLASHLIGHT_DISTANCE;
             float falloff = 1.0 / (scaled * scaled * 0.5 + 1.0);
 
-            float other_vol_shadow = 1.0;
-#ifdef FLASHLIGHT_SHADOWS
+            vec3 other_vol_shadow = vec3(1.0);
+            #ifdef FLASHLIGHT_SHADOWS
             {
-                vec3 o_look     = normalize(look);
-                vec3 o_right    = normalize(cross(o_look, vec3(0.0, 1.0, 0.0)));
-                vec3 o_up       = normalize(cross(o_right, o_look));
-                vec3 o_offset   = o_right *  FL_HAND_OFFSET.x
-                    + o_up    *  FL_HAND_OFFSET.y
-                    + o_look  * -FL_HAND_OFFSET.z;
+                vec3 o_look  = normalize(look);
+                vec3 o_right = normalize(cross(o_look, vec3(0.0, 1.0, 0.0)));
+                vec3 o_up    = normalize(cross(o_right, o_look));
+                vec3 o_offset = o_right *  FL_HAND_OFFSET.x
+                + o_up    *  FL_HAND_OFFSET.y
+                + o_look  * -FL_HAND_OFFSET.z;
 
-                // player_world is already in world space, convert source to view
                 vec3 o_source_view = scene_to_view_space(
-                    (player_world - cameraPosition) + o_offset
+                (player_world - cameraPosition) + o_offset
                 );
-                vec3 o_step_view = scene_to_view_space(sample_world - cameraPosition);
-                vec3 o_mid_view  = o_source_view + 0.6 * (o_step_view - o_source_view);
+                vec3 o_step_view  = scene_to_view_space(sample_world - cameraPosition);
+                vec3 o_mid_view   = o_source_view + 0.6 * (o_step_view - o_source_view);
                 vec3 o_mid_screen = view_to_screen_space(o_mid_view, true);
 
                 if (clamp01(o_mid_screen) == o_mid_screen) {
-                    float sd = texelFetch(depthtex1,
-                        ivec2(o_mid_screen.xy * view_res * taau_render_scale), 0).x;
+                    ivec2 o_texel = ivec2(o_mid_screen.xy * view_res * taau_render_scale);
 
-                    if (sd < 1.0 - 1e-5 && sd != 0.0 && sd >= hand_depth) {
-                        float z_mid = screen_to_view_space_depth(gbufferProjectionInverse, o_mid_screen.z);
-                        float z_sd  = screen_to_view_space_depth(gbufferProjectionInverse, sd);
-                        if (sd < o_mid_screen.z && abs(8.0 - (z_mid - z_sd)) < 8.0)
-                            other_vol_shadow = 0.0;
+                    float o_depth_opaque      = texelFetch(depthtex1, o_texel, 0).x;
+                    float o_depth_translucent = texelFetch(depthtex0, o_texel, 0).x;
+                    float o_z_mid = screen_to_view_space_depth(gbufferProjectionInverse, o_mid_screen.z);
+
+                    // Opaque hit — full black shadow
+                    if (o_depth_opaque < 1.0 - 1e-5 && o_depth_opaque != 0.0
+                    && o_depth_opaque >= hand_depth) {
+                        float o_z_opaque = screen_to_view_space_depth(gbufferProjectionInverse, o_depth_opaque);
+                        if (o_depth_opaque < o_mid_screen.z
+                        && abs(8.0 - (o_z_mid - o_z_opaque)) < 8.0) {
+                            other_vol_shadow = vec3(0.0);
+                        }
+                    }
+                    // Translucent hit — tint by surface albedo, keep marching
+                    else if (o_depth_translucent < o_depth_opaque
+                    && o_depth_translucent < 1.0 - 1e-5 && o_depth_translucent != 0.0
+                    && o_depth_translucent >= hand_depth) {
+                        float o_z_trans = screen_to_view_space_depth(gbufferProjectionInverse, o_depth_translucent);
+                        if (o_depth_translucent < o_mid_screen.z
+                        && abs(8.0 - (o_z_mid - o_z_trans)) < 8.0) {
+                            vec3 tint = texelFetch(colortex1, o_texel, 0).rgb;
+                            other_vol_shadow *= clamp(tint * 2.0, 0.0, 1.0);
+                        }
                     }
                 }
             }
-#endif
+            #endif
             total += col * (cone * falloff * 0.004 * FLASHLIGHT_INTENSITY
-                    * step_size * pl_active * other_vol_shadow);
+            * step_size * pl_active * other_vol_shadow);
         }
     }
 
